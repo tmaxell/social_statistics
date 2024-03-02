@@ -1,4 +1,6 @@
 import string
+import asyncio
+import tkinter as tk
 import threading
 from threading import Thread
 from queue import Queue
@@ -6,24 +8,19 @@ from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 import spacy
 from collections import Counter
-import vk_api
+import requests
 from telethon.sync import TelegramClient
-import asyncio
-import tkinter as tk
 
 vk_key = ''
 tg_id = ''
 tg_hash = ''
 
-vk_session = vk_api.VkApi(token=vk_key)
-vk_api_instance = vk_session.get_api()
-
 nlp = spacy.load("ru_core_news_sm")
 
 def vk_get_user_id(username):
     try:
-        response = vk_api_instance.users.get(user_ids=username)
-        user_id = response[0]['id']
+        response = requests.get(f"https://api.vk.com/method/users.get?user_ids={username}&access_token={vk_key}&v=5.131")
+        user_id = response.json()['response'][0]['id']
         return user_id
     except Exception as e:
         print(f"Ошибка1: {e}")
@@ -31,13 +28,13 @@ def vk_get_user_id(username):
 
 def vk_get_wall(owner_id, count):
     try:
-        response = vk_api_instance.wall.get(owner_id=owner_id, count=count)
-        return response['items']
+        response = requests.get(f"https://api.vk.com/method/wall.get?owner_id={owner_id}&count={count}&access_token={vk_key}&v=5.131")
+        return response.json()['response']['items']
     except Exception as e:
         print(f"Ошибка2: {e}")
         return []
 
-def scrape_vk(users, groups, data_queue):
+async def scrape_vk(users, groups, data_queue):
     for username in users:
         user_id = vk_get_user_id(username)
         if user_id is not None:
@@ -54,17 +51,12 @@ async def scrape_telegram(group_names, data_queue, num_messages):
     api_id = tg_id
     api_hash = tg_hash
 
-    client = TelegramClient('session_name', api_id, api_hash,
-                        system_version='4.16.30-vxCUSTOM')
-    await client.start()
-    for group_name in group_names:
-        group_entity = await client.get_input_entity(group_name)
+    async with TelegramClient('session_name', api_id, api_hash, system_version='4.16.30-vxCUSTOM') as client:
+        for group_name in group_names:
+            group_entity = await client.get_input_entity(group_name)
 
-        async for message in client.iter_messages(group_entity, limit=num_messages):
-            data_queue.put(message.text)
-    await client.disconnect()
-    client.disconnect()
-lock = threading.Lock()
+            async for message in client.iter_messages(group_entity, limit=num_messages):
+                data_queue.put(message.text)
 
 def preprocess_data(data_queue, preprocessed_data, stop_words):
     while True:
@@ -76,7 +68,7 @@ def preprocess_data(data_queue, preprocessed_data, stop_words):
         tokens = word_tokenize(data, language='russian')
         tokens = [word for word in tokens if word not in stop_words and not all(c in string.punctuation + '–«»—“”''utm_source=telegramoid=-67991642act=a_subscribe_boxhttps//vk.com/widget_community.phpstate=1|подпишись' for c in word)]
 
-        with lock:
+        with threading.Lock():
             preprocessed_data.extend(tokens)
 
 def analyze(data, keyword_counts):
