@@ -5,10 +5,9 @@ import threading
 import multiprocessing
 import string
 import nltk
+from collections import Counter
 from PyQt5 import QtWidgets
 from pyrogram import Client
-from nltk.corpus import stopwords
-from collections import Counter
 
 from configuration import *
 
@@ -19,7 +18,7 @@ DATA = {
 
 bad_symb = set(['❤️', '❤', ':', 'https', 'это'])
 
-stop_words = set(stopwords.words('russian')).union(set(stopwords.words('english'))).union(bad_symb)
+stop_words = set(nltk.corpus.stopwords.words('russian')).union(set(nltk.corpus.stopwords.words('english'))).union(bad_symb)
 
 
 def get_channel_messages(api_id, api_hash, channel_names):
@@ -163,14 +162,12 @@ def start():
     if entry1.text():
         tg_ch = get_input_channel_list(entry1.text())
     else:
-        result_text.append("Введите название tg каналов через @")
-
+        result_text.append("Enter tg channels separated by @")
 
     if entry2.text():
         vk_id = get_input_id_list(entry2.text())
     else:
-        result_text.append("Введите название id вк групп")
-
+        result_text.append("Enter vk group IDs")
 
     vk_messages = lambda: get_group_messages(vk_token, vk_id)
 
@@ -190,22 +187,21 @@ def start():
 if __name__ == '__main__':
     app = QtWidgets.QApplication([])
 
-    # Создаем два лейбла
-    label1 = QtWidgets.QLabel("Введите tg каналы:")
-    label2 = QtWidgets.QLabel("Введите id вк групп:")
+    # Create labels
+    label1 = QtWidgets.QLabel("Enter Telegram channels:")
+    label2 = QtWidgets.QLabel("Enter VK group IDs:")
 
-    # Создаем два поля ввода
+    # Create input fields
     entry1 = QtWidgets.QLineEdit()
     entry2 = QtWidgets.QLineEdit()
 
-    # Создаем кнопку "начать"
-    button = QtWidgets.QPushButton("Начать")
+    # Create start button
+    button = QtWidgets.QPushButton("Start")
     button.clicked.connect(start)
 
     result_text = QtWidgets.QTextEdit()
     result_text.setReadOnly(True)
 
-    # Создаем вертикальный layout и добавляем в него виджеты
     layout = QtWidgets.QVBoxLayout()
     layout.addWidget(label1)
     layout.addWidget(entry1)
