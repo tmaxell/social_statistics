@@ -1,166 +1,221 @@
-import string
-import asyncio
-import tkinter as tk
-import threading
-from threading import Thread
-from queue import Queue
-from nltk.corpus import stopwords
-from nltk.tokenize import word_tokenize
-import spacy
-from collections import Counter
+import re
+import json
 import requests
-from telethon.sync import TelegramClient
+import threading
+import multiprocessing
+import string
+import nltk
+from PyQt5 import QtWidgets
+from pyrogram import Client
+from nltk.corpus import stopwords
+from collections import Counter
 
-vk_key = ''
-tg_id = ''
-tg_hash = ''
+from configuration import *
 
-nlp = spacy.load("ru_core_news_sm")
+DATA = {
+    'vk': {},
+    'telegram': {}
+}
 
-def vk_get_user_id(username):
-    try:
-        response = requests.get(f"https://api.vk.com/method/users.get?user_ids={username}&access_token={vk_key}&v=5.131")
-        user_id = response.json()['response'][0]['id']
-        return user_id
-    except Exception as e:
-        print(f"Ошибка1: {e}")
-        return None
+bad_symb = set(['❤️', '❤', ':', 'https', 'это'])
 
-def vk_get_wall(owner_id, count):
-    try:
-        response = requests.get(f"https://api.vk.com/method/wall.get?owner_id={owner_id}&count={count}&access_token={vk_key}&v=5.131")
-        return response.json()['response']['items']
-    except Exception as e:
-        print(f"Ошибка2: {e}")
-        return []
+stop_words = set(stopwords.words('russian')).union(set(stopwords.words('english'))).union(bad_symb)
 
-async def scrape_vk(users, groups, data_queue):
-    for username in users:
-        user_id = vk_get_user_id(username)
-        if user_id is not None:
-            posts = vk_get_wall(user_id, 30)
-            for post in posts:
-                data_queue.put(post['text'])
 
-    for group_id in groups:
-        posts = vk_get_wall(group_id, 30)
-        for post in posts:
-            data_queue.put(post['text'])
+def get_channel_messages(api_id, api_hash, channel_names):
+    data = {}
+    with Client("acc", api_id, api_hash) as app:
+        for channel in channel_names:
+            data[channel] = []
+            channel_info = app.get_chat(channel)
+            for post in app.get_chat_history(channel_info.id, limit=100):
+                if post.caption:
+                    data[channel].append(post.caption)
+    DATA['telegram'] = data
 
-async def scrape_telegram(group_names, data_queue, num_messages):
-    api_id = tg_id
-    api_hash = tg_hash
 
-    async with TelegramClient('session_name', api_id, api_hash, system_version='4.16.30-vxCUSTOM') as client:
-        for group_name in group_names:
-            group_entity = await client.get_input_entity(group_name)
+def get_group_messages(access_token, group_ids):
+    messages = {}
+    for group in group_ids:
+        messages[group] = []
+        response = requests.get(
+            f"https://api.vk.com/method/wall.get?owner_id=-{group}&access_token={access_token}&v=5.131")
+        if response.status_code == 200:
+            data = response.json()
+            for item in data["response"]["items"]:
+                messages[group].append(item["text"])
+    DATA['vk'] = messages
 
-            async for message in client.iter_messages(group_entity, limit=num_messages):
-                data_queue.put(message.text)
 
-def preprocess_data(data_queue, preprocessed_data, stop_words):
-    while True:
-        data = data_queue.get()
-        if data is None:
-            break
-
-        data = data.lower()
-        tokens = word_tokenize(data, language='russian')
-        tokens = [word for word in tokens if word not in stop_words and not all(c in string.punctuation + '–«»—“”''utm_source=telegramoid=-67991642act=a_subscribe_boxhttps//vk.com/widget_community.phpstate=1|подпишись' for c in word)]
-
-        with threading.Lock():
-            preprocessed_data.extend(tokens)
-
-def analyze(data, keyword_counts):
-    doc = nlp(data)
-    target_keywords = ["израиль"]
-    for token in doc:
-        if token.text in target_keywords:
-            keyword_counts[token.text] += 1
-
-def main():
-    num_threads = 1
-    vk_users = ['durov']
-    vk_groups = [-67991642, -15755094, -20169232, -40316705, -27532693]
-    telegram_groups = ['bbcrussian','dwglavnoe','piterach','Cbpub','bazabazon']
-
-    data_queue_vk = Queue()
-    data_queue_telegram = Queue()
-    preprocessed_data_vk = []
-    preprocessed_data_telegram = []
-    keyword_counts_vk = Counter()
-    keyword_counts_telegram = Counter()
-    stop_words = set(stopwords.words('russian'))
-
-    vk_threads = [Thread(target=scrape_vk, args=(vk_users, vk_groups, data_queue_vk)) for _ in range(num_threads)]
-    num_telegram_messages = 30
-
-    telegram_thread = Thread(target=lambda: asyncio.run(scrape_telegram(telegram_groups, data_queue_telegram, num_telegram_messages)))
-    preprocessing_threads = [Thread(target=preprocess_data, args=(data_queue_vk, preprocessed_data_vk, stop_words)),
-                             Thread(target=preprocess_data, args=(data_queue_telegram, preprocessed_data_telegram, stop_words))]
-
-    for thread in vk_threads:
+def get_data_in_parallel(telegram_func, *functions):
+    threads = []
+    telegram_func()
+    for function in functions:
+        thread = threading.Thread(target=function)
         thread.start()
-
-    telegram_thread.start()
-
-    for thread in preprocessing_threads:
-        thread.start()
-
-    for thread in vk_threads:
+        threads.append(thread)
+    for thread in threads:
         thread.join()
 
-    telegram_thread.join()
 
-    for _ in range(num_threads):
-        data_queue_vk.put(None)
-        data_queue_telegram.put(None)
+def remove_stopwords(text):
+    text = re.sub(r'\[.*?\]', '', text)
+    text = re.sub(r'http\S+', '', text)
+    words = text.split()
+    filtered_words = [word for word in words
+                      if word.strip().lower() not in stop_words]
+    return ' '.join(filtered_words)
 
-    for thread in preprocessing_threads:
-        thread.join()
 
-    for data_item in preprocessed_data_vk:
-        analyze(data_item, keyword_counts_vk)
+def remove_punctuation_test(text):
+    translator = str.maketrans('', '', string.punctuation)
+    return text.translate(translator)
 
-    for data_item in preprocessed_data_telegram:
-        analyze(data_item, keyword_counts_telegram)
 
-    for keyword, count in keyword_counts_vk.items():
-        keyword_counts_vk[keyword] = count // (num_threads + 1)
+def remove_punctuation(text):
+    words = nltk.word_tokenize(text)
+    words_without_punct = [word for word in words if word.isalnum()]
+    return ' '.join(words_without_punct)
 
-    for keyword, count in keyword_counts_telegram.items():
-        keyword_counts_telegram[keyword] = count // (num_threads + 1)
 
-    result_text_vk.delete(1.0, tk.END)
-    result_text_telegram.delete(1.0, tk.END)
-    result_text_vk.insert(tk.END, "Количество найденных ключевых слов в VK:\n")
-    result_text_vk.insert(tk.END, str(keyword_counts_vk) + "\n")
+def process_messages(messages):
+    return [remove_punctuation(remove_stopwords(message)) for message in messages]
 
-    result_text_vk.insert(tk.END, "\nТоп 10 слов и их количество в VK:\n")
-    word_counts_vk = Counter(preprocessed_data_vk)
-    top_words_vk = word_counts_vk.most_common(10)
-    for word, count in top_words_vk:
-        result_text_vk.insert(tk.END, f'{word}: {count // (num_threads + 1)}\n')
-    result_text_telegram.insert(tk.END, "Количество найденных ключевых слов в Telegram:\n")
-    result_text_telegram.insert(tk.END, str(keyword_counts_telegram) + "\n")
 
-    result_text_telegram.insert(tk.END, "\nТоп 10 слов и их количество в Telegram:\n")
-    word_counts_telegram = Counter(preprocessed_data_telegram)
-    top_words_telegram = word_counts_telegram.most_common(10)
-    for word, count in top_words_telegram:
-        result_text_telegram.insert(tk.END, f'{word}: {count // (num_threads + 1)}\n')
-    result_text_vk.insert(tk.END, "Анализ данных в VK завершен. Результаты выведены в текстовом поле.")
-    result_text_telegram.insert(tk.END, "Анализ данных в Telegram завершен. Результаты выведены в текстовом поле.")
+def process_data(data):
+    with multiprocessing.Pool() as pool:
+        for source, messages in data.items():
+            for key, value in messages.items():
+                messages[key] = pool.map(process_messages, [value])[0]
 
-root = tk.Tk()
 
-instructions_label = tk.Label(root, text="Нажмите кнопку, чтобы проанализировать данные.")
-instructions_label.pack(pady=10)
-result_text_vk = tk.Text(root)
-result_text_vk.pack()
-result_text_telegram = tk.Text(root)
-result_text_telegram.pack()
-analyze_button = tk.Button(root, text="Проанализировать данные", command=main)
-analyze_button.pack(pady=10)
+def analyze_messages(messages, sort=True):
+    text = ' '.join(messages)
 
-root.mainloop()
+    words = nltk.tokenize.word_tokenize(text)
+
+    hashtags = [word[1:] for word in words if word.startswith('#')]
+    keywords = [word for word in words if word.lower() not in hashtags]
+
+    hashtag_counts = Counter(hashtags)
+    keyword_counts = Counter(keywords)
+
+    topics = [topic for topic, count in keyword_counts.most_common(10)]
+
+    if sort:
+        return {
+            'hashtags': dict(hashtag_counts.most_common()),
+            'keywords': dict(keyword_counts.most_common()),
+            'topics': topics
+        }
+
+    return {
+        'hashtags': dict(hashtag_counts),
+        'keywords': dict(keyword_counts),
+        'topics': topics
+    }
+
+
+def analyze(data):
+    result = {
+        "common_keywords": Counter(),
+        "common_hashtags": Counter()
+    }
+    for media, source in data.items():
+        result[media] = {
+            "common_keywords": Counter(),
+            "common_hashtags": Counter()
+        }
+        for channel, messages in source.items():
+            analyzed_messages = analyze_messages(messages)
+            result[media][channel] = analyzed_messages
+            result[media]['common_keywords'] += Counter(analyzed_messages['keywords'])
+            result[media]['common_hashtags'] += Counter(analyzed_messages['hashtags'])
+
+        result['common_keywords'] += result[media]['common_keywords']
+        result['common_hashtags'] += result[media]['common_hashtags']
+
+        result[media]['common_topics'] = [topic for topic, count in result[media]['common_keywords'].most_common(10)]
+        result[media]['common_keywords'] = dict(result[media]['common_keywords'].most_common())
+        result[media]['common_hashtags'] = dict(result[media]['common_hashtags'].most_common())
+    result['common_topics'] = [topic for topic, count in result['common_keywords'].most_common(10)]
+    result['common_keywords'] = dict(result['common_keywords'].most_common())
+    result['common_hashtags'] = dict(result['common_hashtags'].most_common())
+
+    return result
+
+
+def save_res_to_file(data, filename):
+    with open(f'{filename}.json', 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+
+def get_input_id_list(s):
+    return [int(i.strip()) for i in s.split(',')]
+
+
+def get_input_channel_list(s):
+    return [i.strip() for i in s.split(',')]
+
+
+def start():
+    result_text.clear()
+    if entry1.text():
+        tg_ch = get_input_channel_list(entry1.text())
+    else:
+        result_text.append("Введите название tg каналов через @")
+
+
+    if entry2.text():
+        vk_id = get_input_id_list(entry2.text())
+    else:
+        result_text.append("Введите название id вк групп")
+
+
+    vk_messages = lambda: get_group_messages(vk_token, vk_id)
+
+    tele_messages = lambda: get_channel_messages(teleapi_id, teleapi_hash, tg_ch)
+    get_data_in_parallel(tele_messages, vk_messages)
+    process_data(DATA)
+
+    result = analyze(DATA)
+    save_res_to_file(result, 'dump')
+    result_str = "- Common Topics:\n" + '\n'.join(result["common_topics"]) + "\n- Common Topics vk:\n" + '\n'.join(
+        result['vk']["common_topics"]) + "\n- Common Topics telegram:\n" + '\n'.join(
+        result['telegram']["common_topics"])
+
+    result_text.append(result_str)
+
+
+if __name__ == '__main__':
+    app = QtWidgets.QApplication([])
+
+    # Создаем два лейбла
+    label1 = QtWidgets.QLabel("Введите tg каналы:")
+    label2 = QtWidgets.QLabel("Введите id вк групп:")
+
+    # Создаем два поля ввода
+    entry1 = QtWidgets.QLineEdit()
+    entry2 = QtWidgets.QLineEdit()
+
+    # Создаем кнопку "начать"
+    button = QtWidgets.QPushButton("Начать")
+    button.clicked.connect(start)
+
+    result_text = QtWidgets.QTextEdit()
+    result_text.setReadOnly(True)
+
+    # Создаем вертикальный layout и добавляем в него виджеты
+    layout = QtWidgets.QVBoxLayout()
+    layout.addWidget(label1)
+    layout.addWidget(entry1)
+    layout.addWidget(label2)
+    layout.addWidget(entry2)
+    layout.addWidget(button)
+    layout.addWidget(result_text)
+
+    window = QtWidgets.QWidget()
+    window.setLayout(layout)
+    window.show()
+
+    app.exec_()
