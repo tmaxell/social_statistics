@@ -5,9 +5,9 @@ This program allows you to analyze and gather insights from the content of Teleg
 Install the required dependencies using pip:</br>
 `pip install pyqt5 pyrogram nltk requests` </br>
 Create install.py file with this code: </br>
-`import nltk </br>
-nltk.download('stopwords') </br>
-nltk.download('punkt')` </br>
+`import nltk 
+nltk.download('stopwords') 
+nltk.download('punkt')` 
 Launch this code. </br>
 
 Configure API tokens:
