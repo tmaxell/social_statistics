@@ -7,7 +7,7 @@ Install the required dependencies using pip:</br>
 Create install.py file with this code: </br>
 `import nltk 
 nltk.download('stopwords') 
-nltk.download('punkt')` 
+nltk.download('punkt')` </br>
 Launch this code. </br>
 
 Configure API tokens:
